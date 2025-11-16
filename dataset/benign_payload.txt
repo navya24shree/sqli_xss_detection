@@ -1,0 +1,101 @@
+hello world
+username=navya
+product=shoes
+category=electronics
+search=mobile phones
+email=testuser@example.com
+name=rahul
+message=how are you today
+id=12345
+profile=navya123
+login=guest
+comment=nice product
+query=python tutorial
+search=best laptops 2025
+filter=price_low_to_high
+page=2
+sort=latest
+welcome to my website
+submit form
+feedback=this website is helpful
+color=blue
+size=medium
+address=bengaluru india
+country=india
+rating=4
+quantity=3
+order=processed
+booking=confirmed
+search=top colleges in bangalore
+user=john_doe
+fullname=navya shree
+status=active
+cart=empty
+json={"name":"navya","age":19}
+html=<p>this is a paragraph</p>
+url=https://www.example.com
+home page content
+i love programming
+this is a test message
+temperature=27
+weather=today is sunny
+search=best coding bootcamps
+about us page
+contact=0801234567
+email=info@mysite.com
+subject=application update
+date=2025-01-02
+price=1500
+mobile=9876543210
+location=bmsit yelahanka
+dept=information science
+year=2025
+category=clothing
+username=student_01
+form submitted successfully
+hello my name is navya
+i am learning mern stack
+download file
+upload your resume
+blog post about ai
+article on cybersecurity
+menu=veg biryani
+hotel booking request
+train ticket enquiry
+songs list
+movies list
+search=python vs java
+feedback=overall great service
+task completed
+invoice id 23452
+order id 55321
+view profile
+contact support
+random text example
+no issues found
+click the button to continue
+session expired please login again
+api request received
+json={"status":"ok"}
+html=<div>sample content</div>
+preferences updated
+settings saved
+otp=452913
+password changed
+notes=project submission due next week
+event=tech fest 2025
+club=epoch society
+college=engineering
+workshop registration
+form validation success
+search=healthy recipes
+food=paneer tikka
+drink=coffee
+street address mg road
+building no 24
+door no 6
+zipcode=560064
+this product is worth buying
+the delivery was fast
+payment successful
+logout successful
