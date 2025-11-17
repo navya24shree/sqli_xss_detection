@@ -43,6 +43,6 @@ def predict_payload(text):
 # -----------------------------
 # Test Prediction
 # -----------------------------
-print(predict_payload("<script>alert(1)</script>"))
-print(predict_payload("1 OR '1'='1'; --"))
+# print(predict_payload("<image/src/onerror=prompt(8)>"))
+print("xss\n",predict_payload("1 OR '1'='1'; --"))
 print(predict_payload("hello world"))

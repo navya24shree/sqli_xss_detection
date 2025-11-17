@@ -22,14 +22,14 @@ from sklearn.utils import resample, class_weight
 from sklearn.metrics import classification_report, confusion_matrix
 
 # Configurable paths
-DATA_PATH = os.path.join(os.path.dirname(__file__), "payload_dataset.csv")
+DATA_PATH = os.path.join(os.path.dirname(__file__), "payload_dataset1.csv")
 MODEL_OUT = os.path.join(os.path.dirname(__file__), "attack_cnn_lstm.h5")
 TOKENIZER_OUT = os.path.join(os.path.dirname(__file__), "tokenizer.json")
 LABEL_ENCODER_OUT = os.path.join(os.path.dirname(__file__), "label_encoder.pkl")
 
 # Hyperparameters
 MAX_NUM_WORDS = 20000
-MAX_SEQUENCE_LENGTH = 150
+MAX_SEQUENCE_LENGTH = 120
 EMBEDDING_DIM = 128
 BATCH_SIZE = 32
 EPOCHS = 40
