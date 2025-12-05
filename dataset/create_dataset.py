@@ -14,7 +14,7 @@ df_benign = load_payloads("benign_payload.txt", "benign")
 df = pd.concat([df_sqli, df_xss, df_benign], ignore_index=True)
 
 # Save to CSV
-df.to_csv("payload_dataset.csv", index=False)
+df.to_csv("payload_dataset1.csv", index=False)
 
 print("CSV file created successfully!")
 print("Total samples:", len(df))

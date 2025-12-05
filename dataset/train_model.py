@@ -1,186 +1,231 @@
 
 
-# import pandas as pd
-# from sklearn.feature_extraction.text import TfidfVectorizer
-# from sklearn.model_selection import train_test_split
-# from sklearn.svm import LinearSVC
-# from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-# import joblib
+import os # used for working with files and folder paths
+import random  # generartes random values
+import json  # used for reading and writing json files
+import pickle   # used to save python objects
+import numpy as np   # used for numerical operations
+import pandas as pd   #used for reading csv files and data cleaning
+from collections import Counter  #Used to count occurrences of labels.
 
-# df = pd.read_csv("payload_dataset.csv")
+# set seeds for reproducibility
+#Reproducibility means that every time you run your code, you get the same results.
+#Creating new synthetic (fake but realistic) training samples from your existing data.
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
 
-# # Clean
-# df = df.drop_duplicates()
-# df = df.dropna()
-# df = df[df["payload"].str.strip() != ""]
+import tensorflow as tf #It is deep learning framework used to build, train, and save your neural network model.
+from tensorflow.keras import layers, models, callbacks, optimizers  # in model architecture and training.
+from tensorflow.keras.preprocessing.text import Tokenizer  #converts text → integer sequence.
+from tensorflow.keras.preprocessing.sequence import pad_sequences  #make all sequences same length
 
-# # Vectorizer
-# tfidf = TfidfVectorizer(
-#     analyzer='char',
-#     ngram_range=(2, 6),
-#     min_df=1
-# )
-# X = tfidf.fit_transform(df["payload"])
-# y = df["label"]
+from sklearn.model_selection import train_test_split #Splits your dataset into Training set and Testing set
+from sklearn.preprocessing import LabelEncoder #converts labels(sqli,xss,benign) to integers
+from sklearn.utils import resample, class_weight #To balance the dataset.
+from sklearn.metrics import classification_report, confusion_matrix  #to evaluate model performance
 
-# # Split
-# X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+# Configurable paths
+DATA_PATH = os.path.join(os.path.dirname(__file__), "payload_dataset1.csv")
+MODEL_OUT = os.path.join(os.path.dirname(__file__), "attack_cnn_lstm.h5")
+TOKENIZER_OUT = os.path.join(os.path.dirname(__file__), "tokenizer.json")
+LABEL_ENCODER_OUT = os.path.join(os.path.dirname(__file__), "label_encoder.pkl")
 
-# # Train SVM
-# model = LinearSVC()
-# model.fit(X_train, y_train)
+# Hyperparameters
+MAX_NUM_WORDS = 20000
+MAX_SEQUENCE_LENGTH = 120
+EMBEDDING_DIM = 128
+BATCH_SIZE = 32
+EPOCHS = 40
 
-# # Evaluate
-# y_pred = model.predict(X_test)
-# print("Accuracy:", accuracy_score(y_test, y_pred))
-# print(classification_report(y_test, y_pred))
-# print(confusion_matrix(y_test, y_pred))
-
-# # Save
-# joblib.dump(model, "attack_classifier.pkl")
-# joblib.dump(tfidf, "vectorizer.pkl")
-
-# ...existing code...
-# ...existing code...
-import os
-import re
-import joblib
-import numpy as np
-import pandas as pd
-from collections import Counter
-
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.pipeline import Pipeline, FeatureUnion
-from sklearn.model_selection import train_test_split, StratifiedKFold, RandomizedSearchCV, cross_val_score
-from sklearn.svm import LinearSVC
-from sklearn.dummy import DummyClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from scipy import sparse
-
-# Small engineered numeric features from text
-class TextStats(BaseEstimator, TransformerMixin):
-    def fit(self, X, y=None):
-        return self
-    def transform(self, X):
-        rows = []
-        for s in X:
-            s = "" if s is None else str(s)
-            length = len(s)
-            digits = sum(c.isdigit() for c in s)
-            specials = sum(1 for c in s if not c.isalnum() and not c.isspace())
-            has_script = 1 if re.search(r"script|onerror|onload|<iframe|<img|javascript", s, re.I) else 0
-            has_time = 1 if re.search(r"\b(sleep|pg_sleep|waitfor|benchmark|randomblob)\b", s, re.I) else 0
-            rows.append([length, digits, specials, has_script, has_time])
-        return sparse.csr_matrix(np.array(rows, dtype=np.float32))
-
+#load & clean data- remove dupliactes and remove empty payloads
 def load_and_clean(path):
     df = pd.read_csv(path)
     df = df.drop_duplicates()
     df = df.dropna(subset=["payload", "label"])
-    df["payload"] = df["payload"].astype(str)
-    df = df[df["payload"].str.strip().astype(bool)]
+    df["payload"] = df["payload"].astype(str).str.strip()
+    df = df[df["payload"].astype(bool)]
     df["label"] = df["label"].astype(str)
     return df
 
-def print_diagnostics(y):
-    cnt = Counter(y)
-    print("Total samples:", sum(cnt.values()))
-    print("Label counts:", cnt)
-    dummy = DummyClassifier(strategy="most_frequent")
-    try:
-        cv = cross_val_score(dummy, X_raw, y, cv=5, scoring="accuracy")
-        print("Dummy (most_frequent) 5-fold accuracy:", float(np.mean(cv)))
-    except Exception:
-        pass
+#to balamce the dataset by upsampling minority classes
+def upsample_train(X_train, y_train):
+    train_df = pd.DataFrame({"text": X_train, "label": y_train})
+    max_n = train_df["label"].value_counts().max()
+    parts = []
+
+    for lbl, grp in train_df.groupby("label"):
+        if len(grp) < max_n:
+            parts.append(resample(grp, replace=True, n_samples=max_n, random_state=SEED))
+        else:
+            parts.append(grp)
+
+    balanced = pd.concat(parts).sample(frac=1, random_state=SEED).reset_index(drop=True)
+    return balanced["text"].values, balanced["label"].values
+
+
+#ATTENTION LAYER (Lightweight)
+#It is designed to let the model focus on the most important parts of the sequence (tokens) instead of treating every token equally.
+class AttentionLayer(layers.Layer):
+    def __init__(self):
+        super().__init__()
+
+    def call(self, x):
+        score = tf.nn.softmax(tf.reduce_sum(x, axis=2), axis=1)
+        score = tf.expand_dims(score, axis=2)
+        context = x * score
+        return tf.reduce_sum(context, axis=1)
+
+
+# OPTIMIZED MODEL
+
+def build_model(vocab_size, maxlen, embedding_dim, num_classes):
+    
+    #accepts input sequence after tokenisation
+    inp = layers.Input(shape=(maxlen,), dtype="int32")
+
+    #Embedding - Converts each token (number) into a dense vector representation.
+    x = layers.Embedding(
+        input_dim=vocab_size,
+        output_dim=embedding_dim,
+        input_length=maxlen,
+        mask_zero=True
+    )(inp)
+
+    # BETTER REGULARIZATION FOR TEXT - Makes the model more stable when training text data.
+    x = layers.SpatialDropout1D(0.3)(x)
+
+    # MULTI-SCALE CNN FOR BETTER PATTERN CAPTURE
+    conv3 = layers.Conv1D(256, kernel_size=3, padding="same", activation="relu")(x) #short patterns
+    conv5 = layers.Conv1D(256, kernel_size=5, padding="same", activation="relu")(x)  #medium patterns
+    conv7 = layers.Conv1D(256, kernel_size=7, padding="same", activation="relu")(x)  #long patterns
+
+    x = layers.Concatenate()([conv3, conv5, conv7])
+    x = layers.MaxPooling1D(pool_size=2)(x)
+
+    # STRONGER BiLSTM
+    x = layers.Bidirectional(
+        layers.LSTM(
+            128,
+            return_sequences=True,
+            dropout=0.3,
+            recurrent_dropout=0.2
+        )
+    )(x)
+
+    # LIGHTWEIGHT ATTENTION
+    att = AttentionLayer()(x)
+
+    # FINAL DENSE LAYERS
+    x = layers.Dense(128, activation="relu")(att)
+    x = layers.Dropout(0.4)(x)
+
+    out = layers.Dense(num_classes, activation="softmax")(x)
+
+    model = models.Model(inputs=inp, outputs=out)
+
+    opt = optimizers.Adam(learning_rate=4e-4)
+
+    model.compile(
+        optimizer=opt,
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"]
+    )
+
+    return model
+
+
+# MAIN
 
 if __name__ == "__main__":
-    DATA_PATH = os.path.join(os.path.dirname(__file__), "payload_dataset.csv")
-    print("Loading", DATA_PATH)
+    print("Loading data from", DATA_PATH)
     df = load_and_clean(DATA_PATH)
 
-    X_raw = df["payload"].values
+    X = df["payload"].values
     y = df["label"].values
+    print("Total samples:", len(y), "Label counts:", dict(Counter(y)))
 
-    print_diagnostics(y)
+    # Label encode - Payload labels(sqli,xss,benign) are converted to integers
+    le = LabelEncoder()
+    y_enc = le.fit_transform(y)
 
-    # Stratified split
-    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
-        X_raw, y, test_size=0.25, random_state=42, stratify=y
+    with open(LABEL_ENCODER_OUT, "wb") as f:
+        pickle.dump(le, f)
+
+    # Split + upsample
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y_enc, test_size=0.25, random_state=SEED, stratify=y_enc
     )
 
-    # Build pipeline: char-TF-IDF + numeric stats
-    tfidf = TfidfVectorizer(analyzer="char", dtype=np.float32)
-    features = FeatureUnion([
-        ("tfidf", tfidf),
-        ("stats", TextStats())
-    ])
+    X_train, y_train = upsample_train(X_train, y_train)
+    print("After upsampling:", dict(Counter(y_train)))
 
-    pipe = Pipeline([
-        ("features", features),
-        ("clf", LinearSVC(max_iter=10000, dual=False))
-    ])
+    # Tokenizer- Converts the payload text into numeric sequences
+    tokenizer = Tokenizer(num_words=MAX_NUM_WORDS, oov_token="<OOV>")
+    tokenizer.fit_on_texts(X_train)
 
-    # Quick baseline training with class_weight balanced to check improvement
-    quick_pipe = Pipeline([
-        ("features", features),
-        ("clf", LinearSVC(class_weight="balanced", C=1.0, max_iter=10000, dual=False))
-    ])
+    X_train_seq = tokenizer.texts_to_sequences(X_train)
+    X_test_seq = tokenizer.texts_to_sequences(X_test)
 
-    print("Fitting quick baseline model (class_weight='balanced')...")
-    quick_pipe.fit(X_train_raw, y_train)
-    yq = quick_pipe.predict(X_test_raw)
-    print("Quick baseline accuracy:", accuracy_score(y_test, yq))
-    print(classification_report(y_test, yq))
-    print("Confusion matrix:\n", confusion_matrix(y_test, yq))
+    X_train_pad = pad_sequences(X_train_seq, maxlen=MAX_SEQUENCE_LENGTH, padding="post")
+    X_test_pad = pad_sequences(X_test_seq, maxlen=MAX_SEQUENCE_LENGTH, padding="post")
 
-    # Hyperparameter search (randomized)
-    param_dist = {
-        "features__tfidf__ngram_range": [(2,4), (2,6), (3,6)],
-        "features__tfidf__max_df": [0.75, 0.85, 0.95, 1.0],
-        "features__tfidf__min_df": [1, 2, 3],
-        "features__tfidf__sublinear_tf": [True, False],
-        "features__tfidf__max_features": [20000, 50000, None],
-        "clf__C": [0.01, 0.1, 1, 5, 10],
-        "clf__class_weight": [None, "balanced"]
-    }
+    # Save tokenizer
+    with open(TOKENIZER_OUT, "w", encoding="utf-8") as f:
+        f.write(tokenizer.to_json())
 
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    # Class weights
+    cw = class_weight.compute_class_weight(
+        class_weight="balanced",
+        classes=np.unique(y_train),
+        y=y_train
+    )
+    class_weights = {i: cw_val for i, cw_val in enumerate(cw)}
 
-    search = RandomizedSearchCV(
-        pipe,
-        param_distributions=param_dist,
-        n_iter=30,
-        scoring="f1_macro",
-        n_jobs=-1,
-        cv=cv,
-        verbose=1,
-        random_state=42,
-        return_train_score=False
+    num_classes = len(le.classes_)
+    vocab_size = min(MAX_NUM_WORDS, len(tokenizer.word_index) + 1)
+
+    # Build improved model
+    model = build_model(
+        vocab_size=vocab_size,
+        maxlen=MAX_SEQUENCE_LENGTH,
+        embedding_dim=EMBEDDING_DIM,
+        num_classes=num_classes
     )
 
-    print("Starting hyperparameter search (this may take several minutes)...")
-    search.fit(X_train_raw, y_train)
+    model.summary()
 
-    best = search.best_estimator_
-    print("Best params:", search.best_params_)
+    # Callbacks
+    es = callbacks.EarlyStopping(monitor="val_loss", patience=6, restore_best_weights=True)
+    rl = callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.4, patience=3)
+    ck = callbacks.ModelCheckpoint(MODEL_OUT, monitor="val_loss", save_best_only=True)
 
-    # Evaluate best model
-    y_pred = best.predict(X_test_raw)
-    print("Best model accuracy:", accuracy_score(y_test, y_pred))
-    print("Classification report:\n", classification_report(y_test, y_pred))
-    print("Confusion matrix:\n", confusion_matrix(y_test, y_pred))
+    # Train
+    history = model.fit(
+        X_train_pad,
+        y_train,
+        validation_split=0.1,
+        epochs=EPOCHS,
+        batch_size=BATCH_SIZE,
+        class_weight=class_weights,
+        callbacks=[es, rl, ck],
+        verbose=2
+    )
 
-    # Save artifacts
-    MODEL_OUT = os.path.join(os.path.dirname(__file__), "attack_classifier.pkl")
-    VEC_OUT = os.path.join(os.path.dirname(__file__), "vectorizer.pkl")
-    joblib.dump(best, MODEL_OUT)
-    # extract tfidf vectorizer (first transformer)
-    try:
-        tf = best.named_steps["features"].transformer_list[0][1]
-        joblib.dump(tf, VEC_OUT)
-    except Exception:
-        joblib.dump(tfidf, VEC_OUT)
-    print("Saved model to", MODEL_OUT)
-    print("Saved vectorizer to", VEC_OUT)
-# ...existing code...
+    print("Evaluating...")
+    loss, acc = model.evaluate(X_test_pad, y_test, verbose=0)
+    print(f"TEST LOSS: {loss:.4f}   TEST ACC: {acc:.4f}")
+
+    # Predictions
+    y_pred_probs = model.predict(X_test_pad)
+    y_pred = np.argmax(y_pred_probs, axis=1)
+
+    print("Classification Report:")
+    print(classification_report(y_test, y_pred, target_names=le.classes_, digits=4))
+    
+    #confusion matrix tells you which predictions were correct and where the model is failing.
+    print("Confusion Matrix:")
+    print(confusion_matrix(y_test, y_pred))
+
+    model.save(MODEL_OUT)
+    print("Model, tokenizer, label encoder saved.")
