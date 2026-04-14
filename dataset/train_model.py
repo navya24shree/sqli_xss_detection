@@ -4,6 +4,7 @@ import os # used for working with files and folder paths
 import random  # generartes random values
 import json  # used for reading and writing json files
 import pickle   # used to save python objects
+import argparse  # parse command-line options
 import numpy as np   # used for numerical operations
 import pandas as pd   #used for reading csv files and data cleaning
 from collections import Counter  #Used to count occurrences of labels.
@@ -31,12 +32,12 @@ MODEL_OUT = os.path.join(os.path.dirname(__file__), "attack_cnn_lstm.h5")
 TOKENIZER_OUT = os.path.join(os.path.dirname(__file__), "tokenizer.json")
 LABEL_ENCODER_OUT = os.path.join(os.path.dirname(__file__), "label_encoder.pkl")
 
-# Hyperparameters
-MAX_NUM_WORDS = 20000
-MAX_SEQUENCE_LENGTH = 120
-EMBEDDING_DIM = 128
-BATCH_SIZE = 32
-EPOCHS = 40
+# Default hyperparameters
+DEFAULT_MAX_NUM_WORDS = 20000
+DEFAULT_MAX_SEQUENCE_LENGTH = 120
+DEFAULT_EMBEDDING_DIM = 128
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_EPOCHS = 40
 
 #load & clean data- remove dupliactes and remove empty payloads
 def load_and_clean(path):
@@ -79,12 +80,12 @@ class AttentionLayer(layers.Layer):
 
 # OPTIMIZED MODEL
 
-def build_model(vocab_size, maxlen, embedding_dim, num_classes):
+def build_model(vocab_size, maxlen, embedding_dim, num_classes, conv_filters=256, lstm_units=128):
     
-    #accepts input sequence after tokenisation
+    # accepts input sequence after tokenisation
     inp = layers.Input(shape=(maxlen,), dtype="int32")
 
-    #Embedding - Converts each token (number) into a dense vector representation.
+    # Embedding - Converts each token (number) into a dense vector representation.
     x = layers.Embedding(
         input_dim=vocab_size,
         output_dim=embedding_dim,
@@ -96,9 +97,9 @@ def build_model(vocab_size, maxlen, embedding_dim, num_classes):
     x = layers.SpatialDropout1D(0.3)(x)
 
     # MULTI-SCALE CNN FOR BETTER PATTERN CAPTURE
-    conv3 = layers.Conv1D(256, kernel_size=3, padding="same", activation="relu")(x) #short patterns
-    conv5 = layers.Conv1D(256, kernel_size=5, padding="same", activation="relu")(x)  #medium patterns
-    conv7 = layers.Conv1D(256, kernel_size=7, padding="same", activation="relu")(x)  #long patterns
+    conv3 = layers.Conv1D(conv_filters, kernel_size=3, padding="same", activation="relu")(x) #short patterns
+    conv5 = layers.Conv1D(conv_filters, kernel_size=5, padding="same", activation="relu")(x)  #medium patterns
+    conv7 = layers.Conv1D(conv_filters, kernel_size=7, padding="same", activation="relu")(x)  #long patterns
 
     x = layers.Concatenate()([conv3, conv5, conv7])
     x = layers.MaxPooling1D(pool_size=2)(x)
@@ -106,7 +107,7 @@ def build_model(vocab_size, maxlen, embedding_dim, num_classes):
     # STRONGER BiLSTM
     x = layers.Bidirectional(
         layers.LSTM(
-            128,
+            lstm_units,
             return_sequences=True,
             dropout=0.3,
             recurrent_dropout=0.2
@@ -138,6 +139,32 @@ def build_model(vocab_size, maxlen, embedding_dim, num_classes):
 # MAIN
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train the SQLi/XSS detection model.")
+    parser.add_argument("--fast", action="store_true", help="Use a smaller model and fewer epochs for faster training.")
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS, help="Number of training epochs.")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Training batch size.")
+    parser.add_argument("--max-words", type=int, default=DEFAULT_MAX_NUM_WORDS, help="Tokenizer vocabulary size.")
+    parser.add_argument("--embedding-dim", type=int, default=DEFAULT_EMBEDDING_DIM, help="Embedding dimension size.")
+    args = parser.parse_args()
+
+    max_sequence_length = DEFAULT_MAX_SEQUENCE_LENGTH
+
+    if args.fast:
+        print("Fast mode enabled: reducing model size and epochs for quicker execution.")
+        epochs = 8
+        batch_size = 64
+        max_num_words = min(args.max_words, 10000)
+        embedding_dim = min(args.embedding_dim, 64)
+        conv_filters = 128
+        lstm_units = 64
+    else:
+        epochs = args.epochs
+        batch_size = args.batch_size
+        max_num_words = args.max_words
+        embedding_dim = args.embedding_dim
+        conv_filters = 256
+        lstm_units = 128
+
     print("Loading data from", DATA_PATH)
     df = load_and_clean(DATA_PATH)
 
@@ -161,14 +188,14 @@ if __name__ == "__main__":
     print("After upsampling:", dict(Counter(y_train)))
 
     # Tokenizer- Converts the payload text into numeric sequences
-    tokenizer = Tokenizer(num_words=MAX_NUM_WORDS, oov_token="<OOV>")
+    tokenizer = Tokenizer(num_words=max_num_words, oov_token="<OOV>")
     tokenizer.fit_on_texts(X_train)
 
     X_train_seq = tokenizer.texts_to_sequences(X_train)
     X_test_seq = tokenizer.texts_to_sequences(X_test)
 
-    X_train_pad = pad_sequences(X_train_seq, maxlen=MAX_SEQUENCE_LENGTH, padding="post")
-    X_test_pad = pad_sequences(X_test_seq, maxlen=MAX_SEQUENCE_LENGTH, padding="post")
+    X_train_pad = pad_sequences(X_train_seq, maxlen=max_sequence_length, padding="post")
+    X_test_pad = pad_sequences(X_test_seq, maxlen=max_sequence_length, padding="post")
 
     # Save tokenizer
     with open(TOKENIZER_OUT, "w", encoding="utf-8") as f:
@@ -183,14 +210,16 @@ if __name__ == "__main__":
     class_weights = {i: cw_val for i, cw_val in enumerate(cw)}
 
     num_classes = len(le.classes_)
-    vocab_size = min(MAX_NUM_WORDS, len(tokenizer.word_index) + 1)
+    vocab_size = min(max_num_words, len(tokenizer.word_index) + 1)
 
     # Build improved model
     model = build_model(
         vocab_size=vocab_size,
-        maxlen=MAX_SEQUENCE_LENGTH,
-        embedding_dim=EMBEDDING_DIM,
-        num_classes=num_classes
+        maxlen=max_sequence_length,
+        embedding_dim=embedding_dim,
+        num_classes=num_classes,
+        conv_filters=conv_filters,
+        lstm_units=lstm_units
     )
 
     model.summary()
@@ -205,8 +234,8 @@ if __name__ == "__main__":
         X_train_pad,
         y_train,
         validation_split=0.1,
-        epochs=EPOCHS,
-        batch_size=BATCH_SIZE,
+        epochs=epochs,
+        batch_size=batch_size,
         class_weight=class_weights,
         callbacks=[es, rl, ck],
         verbose=2
